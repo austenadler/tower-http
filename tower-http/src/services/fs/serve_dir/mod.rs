@@ -12,7 +12,7 @@ use std::{
     convert::Infallible,
     io,
     path::{Component, Path, PathBuf},
-    task::{Context, Poll},
+    task::{Context, Poll}, sync::Arc,
 };
 use tower_service::Service;
 
@@ -60,7 +60,9 @@ const DEFAULT_CAPACITY: usize = 65536;
 #[derive(Clone, Debug)]
 pub struct ServeDir<F = DefaultServeDirFallback> {
     base: PathBuf,
-    mount_point: String,
+    // TODO: This is an Arc because it never changes and gets passed around often.
+    // Not sure if this is the best data structure for this though
+    mount_point: Arc<String>,
     buf_chunk_size: usize,
     precompressed_variants: Option<PrecompressedVariants>,
     // This is used to specialise implementation for
@@ -81,7 +83,7 @@ impl ServeDir<DefaultServeDirFallback> {
 
         Self {
             base,
-            mount_point: String::new(),
+            mount_point: Arc::new(String::new()),
             buf_chunk_size: DEFAULT_CAPACITY,
             precompressed_variants: None,
             variant: ServeVariant::Directory {
@@ -98,7 +100,7 @@ impl ServeDir<DefaultServeDirFallback> {
     {
         Self {
             base: path.as_ref().to_owned(),
-            mount_point: String::new(),
+            mount_point: Arc::new(String::new()),
             buf_chunk_size: DEFAULT_CAPACITY,
             precompressed_variants: None,
             variant: ServeVariant::SingleFile { mime },
@@ -156,7 +158,7 @@ impl<F> ServeDir<F> {
     /// ```
 
     pub fn with_mount_point(mut self, mount_point: &str) -> Self {
-        self.mount_point = mount_point.trim_end_matches('/').to_string();
+        self.mount_point = Arc::new(mount_point.trim_end_matches('/').to_string());
         self
     }
 
@@ -395,6 +397,7 @@ impl<F> ServeDir<F> {
         //
         // this is necessary because we cannot clone bodies
         let (mut parts, body) = req.into_parts();
+        tracing::info!("Parts: {parts:#?}");
         // same goes for extensions
         let extensions = std::mem::take(&mut parts.extensions);
         let req = Request::from_parts(parts, Empty::<Bytes>::new());
@@ -413,9 +416,10 @@ impl<F> ServeDir<F> {
             (fallback, fallback_req)
         });
 
-        let Some(requested_path) = req.uri().path().strip_prefix(&self.mount_point) else {
-            return ResponseFuture::invalid_path(fallback_and_request);
-        };
+        // TODO: For whatever reason, axum is not sending the prefix with requests at all
+        // let path = req.uri().path();
+        // let requested_path = path.strip_prefix(&self.mount_point).unwrap_or(path);
+        let requested_path = req.uri().path();
 
         let path_to_file = match self
             .variant
@@ -448,6 +452,7 @@ impl<F> ServeDir<F> {
             negotiated_encodings,
             range_header,
             buf_chunk_size,
+            Arc::clone(&self.mount_point)
         ));
 
         ResponseFuture::open_file_future(open_file_future, fallback_and_request)

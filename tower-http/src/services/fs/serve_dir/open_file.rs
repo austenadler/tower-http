@@ -12,7 +12,7 @@ use std::{
     fs::Metadata,
     io::{self, SeekFrom},
     ops::RangeInclusive,
-    path::{Path, PathBuf},
+    path::{Path, PathBuf}, sync::Arc,
 };
 use tokio::{fs::File, io::AsyncSeekExt};
 
@@ -45,6 +45,7 @@ pub(super) async fn open_file(
     negotiated_encodings: Vec<(Encoding, QValue)>,
     range_header: Option<String>,
     buf_chunk_size: usize,
+    mount_point: Arc<String>
 ) -> io::Result<OpenFileOutput> {
     let if_unmodified_since = req
         .headers()
@@ -67,6 +68,7 @@ pub(super) async fn open_file(
                 &mut path_to_file,
                 req.uri(),
                 append_index_html_on_directories,
+                &mount_point
             )
             .await
             {
@@ -254,11 +256,18 @@ async fn maybe_redirect_or_append_path(
     path_to_file: &mut PathBuf,
     uri: &Uri,
     append_index_html_on_directories: bool,
+    mount_point: &str,
 ) -> Option<OpenFileOutput> {
     if !uri.path().ends_with('/') {
         if is_dir(path_to_file).await {
+
+            // Prepend the mount_point
+            let mut uri_parts = uri.clone().into_parts();
+            uri_parts.path_and_query = uri_parts.path_and_query.map(|paq| (mount_point.to_string() + paq.as_str()).parse().unwrap());
+
             let location =
-                HeaderValue::from_str(&append_slash_on_path(uri.clone()).to_string()).unwrap();
+                HeaderValue::from_str(&append_slash_on_path(Uri::from_parts(uri_parts).unwrap()).to_string()).unwrap();
+
             Some(OpenFileOutput::Redirect { location })
         } else {
             None
