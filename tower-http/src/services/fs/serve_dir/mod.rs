@@ -397,7 +397,6 @@ impl<F> ServeDir<F> {
         //
         // this is necessary because we cannot clone bodies
         let (mut parts, body) = req.into_parts();
-        tracing::info!("Parts: {parts:#?}");
         // same goes for extensions
         let extensions = std::mem::take(&mut parts.extensions);
         let req = Request::from_parts(parts, Empty::<Bytes>::new());
